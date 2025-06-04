@@ -1,0 +1,115 @@
+blueprint:
+  name: Humidity Controlled Switch Automation
+  description: >
+    Monitor multiple humidity sensors and control switches based on humidity thresholds.
+    Switches turn ON when any sensor drops below minimum threshold.
+    Switches turn OFF when all sensors are above maximum threshold.
+  domain: automation
+  input:
+    humidity_sensors:
+      name: Humidity Sensors
+      description: Select the humidity sensors to monitor
+      selector:
+        entity:
+          multiple: true
+          filter:
+            - domain: sensor
+              device_class: humidity
+    target_switches:
+      name: Target Switches
+      description: Select the switches to control (e.g., humidifiers, fans)
+      selector:
+        entity:
+          multiple: true
+          filter:
+            - domain: switch
+    min_humidity:
+      name: Minimum Humidity Threshold
+      description: Turn ON switches when any sensor drops below this value
+      default: 40
+      selector:
+        number:
+          min: 0
+          max: 100
+          unit_of_measurement: "%"
+          mode: slider
+    max_humidity:
+      name: Maximum Humidity Threshold  
+      description: Turn OFF switches when ALL sensors are above this value
+      default: 60
+      selector:
+        number:
+          min: 0
+          max: 100
+          unit_of_measurement: "%"
+          mode: slider
+
+trigger:
+  - platform: state
+    entity_id: !input humidity_sensors
+    
+variables:
+  humidity_sensors: !input humidity_sensors
+  target_switches: !input target_switches
+  min_humidity: !input min_humidity
+  max_humidity: !input max_humidity
+  
+  # Get current humidity values for all sensors
+  sensor_values: >
+    {% set sensors = humidity_sensors %}
+    {% if sensors is string %}
+      {% set sensors = [sensors] %}
+    {% endif %}
+    {% set values = [] %}
+    {% for sensor in sensors %}
+      {% set value = states(sensor) | float(0) %}
+      {% if value > 0 %}
+        {% set values = values + [value] %}
+      {% endif %}
+    {% endfor %}
+    {{ values }}
+    
+  # Check if any sensor is below minimum threshold
+  any_below_min: >
+    {{ sensor_values | select('lt', min_humidity) | list | length > 0 }}
+    
+  # Check if all sensors are above maximum threshold
+  all_above_max: >
+    {{ sensor_values | select('le', max_humidity) | list | length == 0 }}
+
+condition: []
+
+action:
+  - choose:
+      # Turn ON switches when any sensor is below minimum threshold
+      - conditions:
+          - condition: template
+            value_template: "{{ any_below_min }}"
+        sequence:
+          - service: switch.turn_on
+            target:
+              entity_id: !input target_switches
+          - service: logbook.log
+            data:
+              name: "Humidity Control"
+              message: >
+                Switches turned ON - Humidity below {{ min_humidity }}%. 
+                Current values: {{ sensor_values | join(', ') }}%
+      
+      # Turn OFF switches when all sensors are above maximum threshold  
+      - conditions:
+          - condition: template
+            value_template: "{{ all_above_max }}"
+        sequence:
+          - service: switch.turn_off
+            target:
+              entity_id: !input target_switches
+          - service: logbook.log
+            data:
+              name: "Humidity Control"
+              message: >
+                Switches turned OFF - All humidity above {{ max_humidity }}%. 
+                Current values: {{ sensor_values | join(', ') }}%
+
+mode: single
+max_exceeded: silent
