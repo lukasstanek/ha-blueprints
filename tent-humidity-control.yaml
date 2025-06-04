@@ -45,8 +45,17 @@ blueprint:
           mode: slider
 
 trigger:
-  - platform: state
+  # Trigger when any sensor drops below minimum threshold
+  - platform: numeric_state
     entity_id: !input humidity_sensors
+    below: !input min_humidity
+    id: "below_min"
+  
+  # Trigger when any sensor rises above maximum threshold
+  - platform: numeric_state
+    entity_id: !input humidity_sensors
+    above: !input max_humidity
+    id: "above_max"
     
 variables:
   humidity_sensors: !input humidity_sensors
@@ -81,10 +90,10 @@ condition: []
 
 action:
   - choose:
-      # Turn ON switches when any sensor is below minimum threshold
+      # Turn ON switches when triggered by sensor below minimum
       - conditions:
-          - condition: template
-            value_template: "{{ any_below_min }}"
+          - condition: trigger
+            id: "below_min"
         sequence:
           - service: switch.turn_on
             target:
@@ -93,11 +102,14 @@ action:
             data:
               name: "Humidity Control"
               message: >
-                Switches turned ON - Humidity below {{ min_humidity }}%. 
-                Current values: {{ sensor_values | join(', ') }}%
+                Switches turned ON - {{ trigger.entity_id }} dropped to {{ trigger.to_state.state }}% 
+                (below {{ min_humidity }}% threshold)
       
-      # Turn OFF switches when all sensors are above maximum threshold  
+      # Turn OFF switches when triggered by sensor above maximum
+      # But only if ALL sensors are now above the maximum threshold
       - conditions:
+          - condition: trigger
+            id: "above_max"
           - condition: template
             value_template: "{{ all_above_max }}"
         sequence:
@@ -108,7 +120,7 @@ action:
             data:
               name: "Humidity Control"
               message: >
-                Switches turned OFF - All humidity above {{ max_humidity }}%. 
+                Switches turned OFF - All sensors now above {{ max_humidity }}%. 
                 Current values: {{ sensor_values | join(', ') }}%
 
 mode: single
