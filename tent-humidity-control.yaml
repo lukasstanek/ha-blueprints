@@ -44,10 +44,18 @@ blueprint:
           unit_of_measurement: "%"
           mode: slider
 
-# Simple state-based trigger, but we'll filter in conditions
 trigger:
-  - platform: state
+  # Turn ON trigger: any sensor drops below minimum
+  - platform: numeric_state
     entity_id: !input humidity_sensors
+    below: !input min_humidity
+    id: "turn_on"
+  
+  # Turn OFF trigger: any sensor rises above maximum  
+  - platform: numeric_state
+    entity_id: !input humidity_sensors
+    above: !input max_humidity
+    id: "turn_off"
 
 variables:
   humidity_sensors: !input humidity_sensors
@@ -55,7 +63,7 @@ variables:
   min_humidity: !input min_humidity
   max_humidity: !input max_humidity
   
-  # Convert to list if single entity
+  # Convert to list if needed
   sensor_list: >
     {% if humidity_sensors is string %}
       {{ [humidity_sensors] }}
@@ -63,52 +71,23 @@ variables:
       {{ humidity_sensors }}
     {% endif %}
   
-  # Get all current humidity values
-  current_values: >
-    {% set values = [] %}
+  # Check if ALL sensors are above maximum threshold
+  all_sensors_above_max: >
+    {% set ns = namespace(all_above=true) %}
     {% for sensor in sensor_list %}
-      {% set value = states(sensor) | float(-1) %}
-      {% if value >= 0 %}
-        {% set values = values + [value] %}
+      {% set value = states(sensor) | float(0) %}
+      {% if value <= max_humidity %}
+        {% set ns.all_above = false %}
       {% endif %}
     {% endfor %}
-    {{ values }}
-  
-  # Check if any sensor is below minimum
-  any_below_min: >
-    {{ current_values | select('lt', min_humidity) | list | length > 0 }}
-  
-  # Check if all sensors are above maximum  
-  all_above_max: >
-    {{ current_values | select('gt', max_humidity) | list | length == current_values | length }}
-  
-  # Get the value that triggered this automation
-  trigger_value: "{{ trigger.to_state.state | float(-1) }}"
-  
-  # Check if trigger crossed a threshold
-  crossed_below_min: >
-    {{ trigger_value != -1 and trigger_value < min_humidity and 
-       (trigger.from_state.state | float(100)) >= min_humidity }}
-  
-  crossed_above_max: >
-    {{ trigger_value != -1 and trigger_value > max_humidity and 
-       (trigger.from_state.state | float(0)) <= max_humidity }}
-
-condition:
-  # Only proceed if the trigger actually crossed a threshold
-  - condition: or
-    conditions:
-      - condition: template
-        value_template: "{{ crossed_below_min }}"
-      - condition: template  
-        value_template: "{{ crossed_above_max }}"
+    {{ ns.all_above }}
 
 action:
   - choose:
-      # Turn ON: Any sensor crossed below minimum threshold
+      # Turn ON when any sensor is below minimum
       - conditions:
-          - condition: template
-            value_template: "{{ crossed_below_min }}"
+          - condition: trigger
+            id: "turn_on"
         sequence:
           - service: switch.turn_on
             target:
@@ -117,15 +96,15 @@ action:
             data:
               name: "Humidity Control"
               message: >
-                Switches turned ON - {{ trigger.entity_id }} dropped to {{ trigger_value }}% 
-                (crossed below {{ min_humidity }}% threshold)
+                Switches turned ON - {{ trigger.entity_id }} at {{ trigger.to_state.state }}% 
+                (below {{ min_humidity }}% threshold)
       
-      # Turn OFF: Sensor crossed above maximum AND all sensors are now above maximum
+      # Turn OFF only if ALL sensors are above maximum
       - conditions:
+          - condition: trigger
+            id: "turn_off"
           - condition: template
-            value_template: "{{ crossed_above_max }}"
-          - condition: template
-            value_template: "{{ all_above_max }}"
+            value_template: "{{ all_sensors_above_max }}"
         sequence:
           - service: switch.turn_off
             target:
@@ -135,7 +114,7 @@ action:
               name: "Humidity Control"
               message: >
                 Switches turned OFF - All sensors now above {{ max_humidity }}%. 
-                Triggered by {{ trigger.entity_id }} rising to {{ trigger_value }}%
+                Trigger: {{ trigger.entity_id }} at {{ trigger.to_state.state }}%
 
 mode: single
 max_exceeded: silent
